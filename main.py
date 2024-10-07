@@ -30,19 +30,6 @@ PRLIB = "PRLIB"
 PGPB = "PGPB"
 SHPL = "SHPL"
 
-TEXT_MANUAL = "<ol>" \
-              "<li>NLRS — https://e.nlrs.ru/.<br>Необходима регистрация " \
-              "(вы получите логин и пароль).<br>Нужно указать идентификатор книги" \
-              " (для https://e.nlrs.ru/open/<b>1644</b> — это 1644)</li>" \
-              "<li>RGO — https://elib.rgo.ru/.<br>Регистрация не нужна.<br>Укажите ссылку полностью, " \
-              "например:" \
-              "https://elib.rgo.ru/safe-view/123456789/231378/1/MTM0OTVfVHVuZ3Vzc2tvLXJ1c3NraWkgc2xvdmFyJyBla3NwZWRpY2l5YSBwbyBpenVjaGVuaS5wZGY=" \
-              "</li>" \
-              "<li>PRLIB — https://www.prlib.ru/. " \
-              "<br>Регистрация не нужна.<br>Нужно указать идентификатор книги" \
-              " (для https://www.prlib.ru/item/<b>680723</b> — это 680723)</li>" \
-              "</ol>"
-
 
 async def handle_click():
     methods = {NLRS: download_nlrs, RGO: download_rgo,
@@ -162,33 +149,56 @@ def main_page():
     global selector_book_source
     queue = Manager().Queue()
     ui.page_title("LibDownloader")
-    with (ui.row()):
+
+    with ui.row():
         with ui.column():
             selector_book_source = ui.select([NLRS, RGO, PRLIB, PGPB, SHPL], value=NLRS, on_change=process_text_fields)
             login = ui.input("Логин", placeholder="Логин (емейл)", on_change=process_text_fields)
             password = ui.input("Пароль", placeholder="Пароль", on_change=process_text_fields)
             book_id = ui.input("Идентификатор книги", placeholder="Идентификатор книги", on_change=process_text_fields)
         with ui.column():
-            with ui.row():
-                button_choose_folder = ui.button("Указать папку для сохранения", on_click=pick_file, icon='folder')
-                folder_displayed = ui.label(os.path.abspath(folder))
-                button_download = ui.button("Скачать книгу", on_click=lambda: handle_click())
-                button_download.disable()
+            button_download = ui.button("Скачать книгу", on_click=lambda: handle_click())
+            button_download.disable()
+            button_choose_folder = ui.button("Указать папку для сохранения", on_click=pick_file, icon='folder')
+            folder_displayed = ui.label(os.path.abspath(folder))
+        with ui.column():
             with ui.list().props("dense separator"):
                 with ui.item():
                     with ui.item_section():
                         ui.item_label(NLRS)
                         ui.item_label("Необходима регистрация").props('caption')
-                        ui.item_label("Для ссылки вида для https://e.nlrs.ru/open/1644 укажите 1644").props(
-                                'caption')
+                        ui.item_label("Для ссылки вида https://e.nlrs.ru/open/1644 укажите 1644").props(
+                            "caption")
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(RGO)
+                        ui.item_label("Укажите полную ссылку, например").props('caption')
+                        ui.item_label(
+                            "https://elib.rgo.ru/safe-view/123456789/231378/1/MTM0OTVfVHVuZ3Vzc2tvLXJ1c3NraWkgc2xvdmFyJyBla3NwZWRpY2l5YSBwbyBpenVjaGVuaS5wZGY=").props(
+                            "caption")
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(PRLIB)
+                        ui.item_label("Для ссылки вида https://www.prlib.ru/item/680723 укажите 680723").props(
+                            "caption")
+
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(PGPB)
+                        ui.item_label("Для ссылки вида https://pgpb.ru/digitization/document/4375 укажите 4375").props(
+                            "caption")
+
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(SHPL)
+                        ui.item_label("Для ссылки вида http://elib.shpl.ru/pages/5006468/ укажите 5006468").props(
+                            "caption")
+            spinner = ui.spinner("dots", size="lg", color="red")
+            spinner.visible = False
+            progressbar = ui.linear_progress(value=0, show_value=False).props("instant-feedback")
+            progressbar.visible = False
+            ui.timer(0.1,
+                     callback=lambda: process_timer(progressbar, spinner, queue))
 
 
-        spinner = ui.spinner("dots", size="lg", color="red")
-        spinner.visible = False
-        progressbar = ui.linear_progress(value=0, show_value=False).props("instant-feedback")
-        progressbar.visible = False
-        ui.timer(0.1,
-                 callback=lambda: process_timer(progressbar, spinner, queue))
-
-
-ui.run(native=True, reconnect_timeout=0)
+ui.run(native=True, reconnect_timeout=0, window_size=(1500, 500))

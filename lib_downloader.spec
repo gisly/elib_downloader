@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('D:\\Projects\\LibDownloader\\venv\\Lib\\site-packages\\nicegui', 'nicegui')],
+    datas=[('D:\\Elena\\Git\\elib_downloader\\venv\\Lib\\site-packages\\nicegui', 'nicegui')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
