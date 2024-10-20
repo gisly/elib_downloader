@@ -70,7 +70,9 @@ class NLRSDownloader(LibraryDownloader):
 
     def move_to_beginning(self):
         self.make_pause()
-        slider = self.driver.find_element(by=By.CSS_SELECTOR, value="input[type='range']")
+        wait = WebDriverWait(self.driver, self.PAUSE_SEC)
+        slider = wait.until(
+            expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, "input[type='range']")))
         current_page = int(slider.get_attribute("value"))
         self.last_page = int(slider.get_attribute("max")) + 1
         if current_page > self.page_from:
@@ -109,14 +111,14 @@ class NLRSDownloader(LibraryDownloader):
             if i < self.last_page:
                 self.get_next_page_button().click()
 
-
     def get_next_page_button(self):
-        return self.driver.find_element(by=By.CSS_SELECTOR,
-                                 value="button[title='Перейти на следующую страницу']")
+        wait = WebDriverWait(self.driver, self.PAUSE_SEC)
+        return wait.until(
+            expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, "button[title='Перейти на следующую страницу']")))
+
 
     def get_previous_page_button(self):
-        return self.driver.find_element(by=By.CSS_SELECTOR,
-                                 value="button[title='Перейти на предыдущую страницу']")
-
-
+        wait = WebDriverWait(self.driver, self.PAUSE_SEC)
+        return wait.until(
+            expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, "button[title='Перейти на предыдущую страницу']")))
 
