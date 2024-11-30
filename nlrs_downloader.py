@@ -114,11 +114,11 @@ class NLRSDownloader(LibraryDownloader):
     def get_next_page_button(self):
         wait = WebDriverWait(self.driver, self.PAUSE_SEC)
         return wait.until(
-            expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, "button[title='Перейти на следующую страницу']")))
-
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, "button[title='Перейти на следующую страницу']")))
 
     def get_previous_page_button(self):
         wait = WebDriverWait(self.driver, self.PAUSE_SEC)
         return wait.until(
-            expected_conditions.element_to_be_clickable((By.CSS_SELECTOR, "button[title='Перейти на предыдущую страницу']")))
-
+            expected_conditions.element_to_be_clickable(
+                (By.CSS_SELECTOR, "button[title='Перейти на предыдущую страницу']")))

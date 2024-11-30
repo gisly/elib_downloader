@@ -25,6 +25,7 @@ class LibraryDownloader(ABC):
     last_page: int = NotImplemented
     folder: str = NotImplemented
     root_folder: str = NotImplemented
+    section_folder: str = NotImplemented
 
     @classmethod
     def download_book(cls, book_url, queue: Queue):
@@ -69,6 +70,10 @@ class LibraryDownloader(ABC):
     def create_folders(self, book_id):
         self.folder = os.path.join(self.root_folder, self.current_section + "_" + book_id)
         os.makedirs(self.folder, exist_ok=True)
+
+    def create_common_section_folder(self):
+        self.section_folder = os.path.join(self.root_folder, self.current_section)
+        os.makedirs(self.section_folder, exist_ok=True)
 
     def get_page_content(self, url):
         i = 0

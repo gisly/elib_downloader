@@ -20,7 +20,6 @@ class RGODownloader(LibraryDownloader):
     queue = None
     page_from = 1
 
-
     def __init__(self, config):
         self.init_non_authorized_access(config)
 

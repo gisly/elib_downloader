@@ -7,6 +7,7 @@ from nicegui import run, ui
 
 from local_file_picker import local_file_picker
 from nlrs_downloader import NLRSDownloader
+from pdfreader_downloader import PDFReaderDownloader
 from pgpb_downloader import PGPBDownloader
 from prlib_downloader import PRlibDownloader
 from rgo_downloader import RGODownloader
@@ -29,12 +30,13 @@ RGO = "RGO"
 PRLIB = "PRLIB"
 PGPB = "PGPB"
 SHPL = "SHPL"
-
+PDF_READER = "PDF_READER"
 
 async def handle_click():
     methods = {NLRS: download_nlrs, RGO: download_rgo,
                PRLIB: download_prlib,
-               PGPB: download_pgpb, SHPL: download_shpl}
+               PGPB: download_pgpb, SHPL: download_shpl,
+               PDF_READER: download_pdfreader}
     global is_book_download_in_progress
     global queue
     if is_book_download_in_progress:
@@ -114,6 +116,11 @@ def download_shpl(config, book_id_value, queue: Queue):
     return shpl_downloader.download_book(book_id_value, queue)
 
 
+def download_pdfreader(config, book_id_value, queue: Queue):
+    pdfreader_downloader = PDFReaderDownloader(config, book_id_value)
+    return pdfreader_downloader.download_book(book_id_value, queue)
+
+
 def draw(surface: cairo.Surface) -> None:
     context = cairo.Context(surface)
     context.select_font_face("Arial", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
@@ -152,7 +159,7 @@ def main_page():
 
     with ui.row():
         with ui.column():
-            selector_book_source = ui.select([NLRS, RGO, PRLIB, PGPB, SHPL], value=NLRS, on_change=process_text_fields)
+            selector_book_source = ui.select([NLRS, RGO, PRLIB, PGPB, SHPL, PDF_READER], value=NLRS, on_change=process_text_fields)
             login = ui.input("Логин", placeholder="Логин (емейл)", on_change=process_text_fields)
             password = ui.input("Пароль", placeholder="Пароль", on_change=process_text_fields)
             book_id = ui.input("Идентификатор книги", placeholder="Идентификатор книги", on_change=process_text_fields)
@@ -192,6 +199,14 @@ def main_page():
                     with ui.item_section():
                         ui.item_label(SHPL)
                         ui.item_label("Для ссылки вида http://elib.shpl.ru/pages/5006468/ укажите 5006468").props(
+                            "caption")
+
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(PDF_READER)
+                        ui.item_label("Укажите полную ссылку, например").props('caption')
+                        ui.item_label(
+                            "http://62.249.142.211:8083/read/88/pdf").props(
                             "caption")
             spinner = ui.spinner("dots", size="lg", color="red")
             spinner.visible = False
