@@ -4,6 +4,7 @@ elib_downloader предназначен для более удобного ск
 - https://www.prlib.ru/ (регистрация не нужна, для ссылки вида https://www.prlib.ru/item/680723 указать 680723)
 - https://pgpb.ru/ (регистрация не нужна, для ссылки вида https://pgpb.ru/digitization/document/4375 указать 4375)
 - http://elib.shpl.ru/ru/nodes/9347-elektronnaya-biblioteka-gpib (регистрация не нужна, для ссылки вида http://elib.shpl.ru/pages/5006468/ указать 5006468)
+- http://62.249.142.211:8083/read/183/pdf (регистрация не нужна, указать полную ссылку вида http://62.249.142.211:8083/read/183/pdf)
 
 При запуске приложения пользователь увидит окно консоли (закрывать его не нужно), а затем графический интерфейс программы.  
 Приложение эмулирует ручные действия пользователя по копированию страниц.  
@@ -79,4 +80,14 @@ activate
 cd ..
 cd ..
 python main.py
+```
+
+##  Сборка исполняемого файла для Windows
+```sh
+cd venv
+cd Scripts
+activate
+cd ..
+cd ..
+nicegui-pack --onefile --name "elib_downloader" main.py
 ```
