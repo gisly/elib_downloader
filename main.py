@@ -217,9 +217,10 @@ def main_page():
                 with ui.item():
                     with ui.item_section():
                         ui.item_label(LIBFL)
-                        ui.item_label("Укажите ID книги, например").props('caption')
+                        ui.item_label("Необходима регистрация").props('caption')
+                        ui.item_label("Укажите ID книги либо заказа, например").props('caption')
                         ui.item_label(
-                            "BJVVV_1145624").props(
+                            "bookID=BJVVV_604652 ЛИБО OrderId=920010").props(
                             "caption")
             spinner = ui.spinner("dots", size="lg", color="red")
             spinner.visible = False

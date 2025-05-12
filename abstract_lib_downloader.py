@@ -75,10 +75,13 @@ class LibraryDownloader(ABC):
         self.section_folder = os.path.join(self.root_folder, self.current_section)
         os.makedirs(self.section_folder, exist_ok=True)
 
-    def get_page_content(self, url):
+    def get_page_content(self, url, additional_headers=None):
+        if additional_headers is None:
+            additional_headers = dict()
         i = 0
         result = None
         headers = {"User-Agent": self.USER_AGENT}
+        headers.update(additional_headers)
         while i < self.RETRY_NUM:
             result = requests.get(url, headers=headers)
             i += 1
@@ -99,7 +102,9 @@ class LibraryDownloader(ABC):
         with open(output_filename, 'wb') as fout:
             fout.write(image)
 
-    def download_html(self, url):
-        result = self.get_page_content(url)
+    def download_html(self, url, additional_headers=None):
+        if additional_headers is None:
+            additional_headers = dict()
+        result = self.get_page_content(url, additional_headers)
         html = result.text
         return BeautifulSoup(html, features="html5lib")
