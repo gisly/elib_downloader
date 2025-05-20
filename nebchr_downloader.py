@@ -64,6 +64,7 @@ class NEBCHRDownloader(LibraryDownloader):
             self.page_from = page_from
             self.make_pause()
             self.open_site()
+            self.make_pause()
             self.download_pages(book_id)
         except Exception as e:
             logging.error(f"Exception occurred {e}")
