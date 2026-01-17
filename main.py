@@ -14,6 +14,7 @@ from pgpb_downloader import PGPBDownloader
 from prlib_downloader import PRlibDownloader
 from rgo_downloader import RGODownloader
 from shpl_downloader import SHPLDownloader
+from kazneb_downloader import KAZNEBDownloader
 
 queue = None
 is_book_download_in_progress = False
@@ -35,6 +36,8 @@ SHPL = "SHPL"
 PDF_READER = "PDF_READER"
 LIBFL = "LIBFL"
 NEBCHR = "NEBCHR"
+KAZNEB = "KAZNEB"
+
 
 async def handle_click():
     methods = {NLRS: download_nlrs, RGO: download_rgo,
@@ -42,7 +45,8 @@ async def handle_click():
                PGPB: download_pgpb, SHPL: download_shpl,
                PDF_READER: download_pdfreader,
                LIBFL: download_libfl,
-               NEBCHR: download_nebchr}
+               NEBCHR: download_nebchr,
+               KAZNEB: download_kazneb}
     global is_book_download_in_progress
     global queue
     if is_book_download_in_progress:
@@ -121,17 +125,26 @@ def download_shpl(config, book_id_value, queue: Queue):
     shpl_downloader = SHPLDownloader(config)
     return shpl_downloader.download_book(book_id_value, queue)
 
+
 def download_pdfreader(config, book_id_value, queue: Queue):
     pdfreader_downloader = PDFReaderDownloader(config, book_id_value)
     return pdfreader_downloader.download_book(book_id_value, queue)
+
 
 def download_libfl(config, book_id_value, queue: Queue):
     libfl_downloader = LIBFLDownloader(config)
     return libfl_downloader.download_book(book_id_value, queue)
 
+
 def download_nebchr(config, book_id_value, queue: Queue):
     nebchr_downloader = NEBCHRDownloader(config)
     return nebchr_downloader.download_book(book_id_value, queue)
+
+
+def download_kazneb(config, book_id_value, queue: Queue):
+    kazneb_downloader = KAZNEBDownloader(config)
+    return kazneb_downloader.download_book(book_id_value, queue)
+
 
 def draw(surface: cairo.Surface) -> None:
     context = cairo.Context(surface)
@@ -171,7 +184,8 @@ def main_page():
 
     with ui.row():
         with ui.column():
-            selector_book_source = ui.select([NLRS, RGO, PRLIB, PGPB, SHPL, PDF_READER, LIBFL, NEBCHR], value=NLRS, on_change=process_text_fields)
+            selector_book_source = ui.select([NLRS, RGO, PRLIB, PGPB, SHPL, PDF_READER, LIBFL, NEBCHR, KAZNEB], value=NLRS,
+                                             on_change=process_text_fields)
             login = ui.input("Логин", placeholder="Логин (емейл)", on_change=process_text_fields)
             password = ui.input("Пароль", placeholder="Пароль", on_change=process_text_fields)
             book_id = ui.input("Идентификатор книги", placeholder="Идентификатор книги", on_change=process_text_fields)
@@ -235,6 +249,12 @@ def main_page():
                         ui.item_label(NEBCHR)
                         ui.item_label("Необходима регистрация").props('caption')
                         ui.item_label("Укажите ID книги, например 3041").props('caption')
+
+                with ui.item():
+                    with ui.item_section():
+                        ui.item_label(KAZNEB)
+                        ui.item_label("Для ссылки вида https://kazneb.kz/ru/catalogue/view/1543925 укажите 1543925").props(
+                            "caption")
             spinner = ui.spinner("dots", size="lg", color="red")
             spinner.visible = False
             progressbar = ui.linear_progress(value=0, show_value=False).props("instant-feedback")
