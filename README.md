@@ -1,4 +1,15 @@
 elib_downloader предназначен для более удобного скачивания файлов из электронных библиотек.
+
+## GUI
+
+Приложение имеет два варианта интерфейса:
+
+| Файл | Интерфейс | Зависимости |
+|---|---|---|
+| `main.py` | NiceGUI (веб, старый) | nicegui, pywebview, pywin32, pycairo |
+| `main_gui.py` | CustomTkinter (нативный, новый) | customtkinter |
+
+**Рекомендуется** использовать `main_gui.py` — нативное десктоп-приложение, которое не требует веб-сервера и легко собирается в `.exe`.
 - https://e.nlrs.ru/ (необходимо пройти регистрацию и указать в приложении свои логин и пароль; для ссылки вида https://e.nlrs.ru/open/1644 указать 1644)
 - https://elib.rgo.ru/ (регистрация не нужна, указать полную ссылку вида https://elib.rgo.ru/safe-view/123456789/231378/1/MTM0OTVfVHVuZ3Vzc2tvLXJ1c3NraWkgc2xvdmFyJyBla3NwZWRpY2l5YSBwbyBpenVjaGVuaS5wZGY=)
 - https://www.prlib.ru/ (регистрация не нужна, для ссылки вида https://www.prlib.ru/item/680723 указать 680723)
@@ -44,8 +55,9 @@ pip install -r requirements.txt;
 ### Запуск
 ```
 source venv/bin/activate;
-python main.py;
+python main_gui.py;
 ```
+(или `python main.py` для старого NiceGUI-интерфейса)
 
 
 ## Windows (если у вас установлен Python)
@@ -86,6 +98,16 @@ python main.py
 ```
 
 ##  Сборка исполняемого файла для Windows
+
+### Новый GUI (CustomTkinter) — рекомендуется
+```sh
+cd venv\Scripts & activate & cd ..\..
+pip install -r requirements.txt
+pyinstaller elib_downloader_gui.spec --clean
+```
+Или просто запустите `build.bat`. Готовый exe появится в папке `dist\`.
+
+### Старый GUI (NiceGUI)
 ```sh
 cd venv
 cd Scripts

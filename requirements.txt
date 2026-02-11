@@ -2,12 +2,10 @@ pycairo
 selenium
 requests
 tqdm
-nicegui
-pywebview
 pyinstaller
-pywin32
 bs4
 pillow
 numpy
 html5lib
 PyPDF2
+customtkinter
