@@ -57,17 +57,18 @@ DOWNLOAD_FUNCTIONS = {
 # ---------------------------------------------------------------------------
 # Color palette & theme
 # ---------------------------------------------------------------------------
-# Deep navy + warm amber accent — elegant, readable, unique
-BG_DARK      = "#0f1923"
-BG_CARD      = "#162533"
-BG_INPUT     = "#1c3044"
-FG_TEXT       = "#e8e1d5"
-FG_DIM        = "#8a9bae"
-ACCENT        = "#e09f3e"
-ACCENT_HOVER  = "#c78a2f"
-SUCCESS       = "#4ecca3"
-ERROR         = "#ff6b6b"
-BORDER        = "#263d52"
+# Light warm palette — clean, soft, professional
+BG_LIGHT      = "#f5f2ed"
+BG_CARD       = "#ffffff"
+BG_INPUT      = "#f0ece6"
+FG_TEXT        = "#2c2c2c"
+FG_DIM         = "#7a7670"
+ACCENT         = "#c47b2b"
+ACCENT_HOVER   = "#a8641f"
+SUCCESS        = "#2d9b6e"
+ERROR          = "#c94444"
+BORDER         = "#ddd7ce"
+DISABLED_BG    = "#e8e4de"
 
 
 class App(ctk.CTk):
@@ -80,7 +81,7 @@ class App(ctk.CTk):
         self.title("elib_downloader")
         self.geometry("960x640")
         self.minsize(820, 560)
-        self.configure(fg_color=BG_DARK)
+        self.configure(fg_color=BG_LIGHT)
 
         # State
         self.folder = os.path.abspath(".")
@@ -112,7 +113,7 @@ class App(ctk.CTk):
         ).pack(side="left", padx=8)
 
         # ---------- Main content area with two columns ----------
-        body = ctk.CTkFrame(self, fg_color=BG_DARK)
+        body = ctk.CTkFrame(self, fg_color=BG_LIGHT)
         body.pack(fill="both", expand=True, padx=20, pady=(16, 20))
         body.columnconfigure(0, weight=1, minsize=360)
         body.columnconfigure(1, weight=1, minsize=360)
@@ -176,7 +177,7 @@ class App(ctk.CTk):
         self.download_btn = ctk.CTkButton(
             inner_left, text="⬇  Скачать книгу", height=44,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=BG_DARK, font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=BG_CARD, font=ctk.CTkFont(size=15, weight="bold"),
             corner_radius=10,
             command=self._start_download
         )
@@ -296,8 +297,8 @@ class App(ctk.CTk):
         else:
             self.login_entry.delete(0, "end")
             self.password_entry.delete(0, "end")
-            self.login_entry.configure(state="disabled", fg_color="#111b24")
-            self.password_entry.configure(state="disabled", fg_color="#111b24")
+            self.login_entry.configure(state="disabled", fg_color=DISABLED_BG)
+            self.password_entry.configure(state="disabled", fg_color=DISABLED_BG)
 
         self.hint_label.configure(text=f"{src}: {info['hint'].splitlines()[0]}")
 
@@ -383,7 +384,7 @@ class App(ctk.CTk):
 # Entry point
 # ---------------------------------------------------------------------------
 def main():
-    ctk.set_appearance_mode("dark")
+    ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("dark-blue")
 
     app = App()
