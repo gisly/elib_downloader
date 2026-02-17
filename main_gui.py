@@ -89,8 +89,105 @@ class App(ctk.CTk):
         self.queue: queue.Queue | None = None
 
         self._build_ui()
+        self._bind_clipboard_shortcuts()
         self._on_source_changed()
         self._poll_progress()
+
+    # =======================================================================
+    # Clipboard shortcuts (Ctrl+C/V/X/A for both Latin and Cyrillic layouts)
+    # =======================================================================
+    def _bind_clipboard_shortcuts(self):
+        """Bind standard clipboard shortcuts globally.
+
+        CustomTkinter on Windows sometimes swallows Ctrl+C / Ctrl+V.
+        We also handle Cyrillic layout via a generic KeyPress handler,
+        since tkinter can't bind Unicode keysyms directly on Windows.
+        """
+        for widget_class in (ctk.CTkEntry, ctk.CTkTextbox):
+            # Latin keys
+            self.bind_class(widget_class.__name__, "<Control-a>", self._select_all)
+            self.bind_class(widget_class.__name__, "<Control-A>", self._select_all)
+            self.bind_class(widget_class.__name__, "<Control-c>", self._copy)
+            self.bind_class(widget_class.__name__, "<Control-C>", self._copy)
+            self.bind_class(widget_class.__name__, "<Control-v>", self._paste)
+            self.bind_class(widget_class.__name__, "<Control-V>", self._paste)
+            self.bind_class(widget_class.__name__, "<Control-x>", self._cut)
+            self.bind_class(widget_class.__name__, "<Control-X>", self._cut)
+            # Cyrillic layout: catch via generic Control+KeyPress and check keycode
+            # On Windows, physical keys produce the same keycode regardless of layout
+            # C=46, V=47, X=53, A=38 (these are X11-style keycodes that tk uses)
+            self.bind_class(widget_class.__name__, "<Control-KeyPress>", self._on_ctrl_keypress)
+
+    def _on_ctrl_keypress(self, event):
+        """Handle Ctrl+key for Cyrillic layout.
+
+        When Russian layout is active, pressing physical C/V/X/A keys
+        produces Cyrillic с/м/ч/ф characters. We map those to clipboard ops.
+        """
+        char = event.char.lower() if event.char else ""
+        cyrillic_map = {
+            "\u0441": self._copy,       # с → copy
+            "\u043c": self._paste,      # м → paste
+            "\u0447": self._cut,        # ч → cut
+            "\u0444": self._select_all, # ф → select all
+        }
+        handler = cyrillic_map.get(char)
+        if handler:
+            return handler(event)
+
+    @staticmethod
+    def _copy(event):
+        widget = event.widget
+        try:
+            if hasattr(widget, "selection_get"):
+                widget.clipboard_clear()
+                widget.clipboard_append(widget.selection_get())
+        except Exception:
+            pass
+        return "break"
+
+    @staticmethod
+    def _paste(event):
+        widget = event.widget
+        try:
+            text = widget.clipboard_get()
+            if hasattr(widget, "delete") and hasattr(widget, "insert"):
+                try:
+                    widget.delete("sel.first", "sel.last")
+                except Exception:
+                    pass
+                widget.insert("insert", text)
+        except Exception:
+            pass
+        return "break"
+
+    @staticmethod
+    def _cut(event):
+        widget = event.widget
+        try:
+            if hasattr(widget, "selection_get"):
+                widget.clipboard_clear()
+                widget.clipboard_append(widget.selection_get())
+                try:
+                    widget.delete("sel.first", "sel.last")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return "break"
+
+    @staticmethod
+    def _select_all(event):
+        widget = event.widget
+        try:
+            if isinstance(widget, (ctk.CTkEntry,)):
+                widget.select_range(0, "end")
+                widget.icursor("end")
+            elif hasattr(widget, "tag_add"):
+                widget.tag_add("sel", "1.0", "end")
+        except Exception:
+            pass
+        return "break"
 
     # =======================================================================
     # UI Construction
