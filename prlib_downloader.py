@@ -72,7 +72,7 @@ class PRlibDownloader(LibraryDownloader):
     def get_book_metadata(self, book_url, main_page, book_name, book_second_name):
         metadata_json = None
         try:
-            metadata_json = json.loads(requests.get(self.METADATA_URL.format(book_name=book_name,
+            metadata_json = json.loads(self.get_page_content(self.METADATA_URL.format(book_name=book_name,
                                                                              book_second_name=book_second_name)).text)
         except Exception as e:
             logging.info(f"Error loading metadata, trying another method: {str(e)}")
@@ -87,11 +87,11 @@ class PRlibDownloader(LibraryDownloader):
                         book_name = book_link_parts[-2].strip("\\")
                         book_second_name = book_link_parts[-1].strip("\\").strip('"')
                     break
-        try:
-            metadata_json = json.loads(requests.get(self.METADATA_URL.format(book_name=book_name,
-                                                                             book_second_name=book_second_name)).text)
-        except Exception as e:
-            logging.error(f"Error loading metadata: {str(e)}")
+            try:
+                metadata_json = json.loads(self.get_page_content(self.METADATA_URL.format(book_name=book_name,
+                                                                                          book_second_name=book_second_name)).text)
+            except Exception as e:
+                logging.error(f"Error loading metadata: {str(e)}")
         if metadata_json is None:
             raise Exception(f"Could not get metadata for {book_url}")
         return metadata_json
@@ -116,7 +116,7 @@ class PRlibDownloader(LibraryDownloader):
         i = 0
         while i < self.RETRY_NUM:
             try:
-                result = requests.get(tile_url)
+                result = self.get_page_content(tile_url)
             except Exception as e:
                 logging.error(f"Error downloading {tile_url}: {str(e)}")
             status_code = result.status_code
@@ -134,7 +134,7 @@ class PRlibDownloader(LibraryDownloader):
         return True
 
     def download_html(self, url):
-        html = requests.get(url).text
+        html = self.get_page_content(url).text
         return BeautifulSoup(html, features="html5lib")
 
     def concatenate_tiles(self, book_folder, total_page_num):
