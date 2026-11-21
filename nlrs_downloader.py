@@ -88,26 +88,21 @@ class NLRSDownloader(LibraryDownloader):
         cookies_str = ";".join([c["name"] + "=" + c["value"] for c in cookies])
         n = self.last_page + 1
         for i in tqdm(range(1, self.last_page + 1)):
-            self.queue.put_nowait(round(i / n, 2))
-            if i >= self.page_from:
-                logging.info(f"Downloading page {i} out of {self.last_page}")
-                filename = str(i).zfill(4) + ".png"
-                full_filename = os.path.join(self.folder, filename)
+            self.check_cancel()
+            filename = f"{i:04d}.png"
+            full_filename = os.path.join(self.folder, filename)
+            reused = self.file_ready(full_filename)
+            if i >= self.page_from and not reused:
                 self.make_pause()
-                wait = WebDriverWait(self.driver, 0)
+                wait = WebDriverWait(self.driver, self.PAUSE_SEC)
                 element_file_viewer = wait.until(
-                    expected_conditions.element_to_be_clickable((By.ID, "root")))
-                element_image = element_file_viewer. \
-                    find_element(by=By.ID, value="page-container"). \
-                    find_element(by=By.TAG_NAME, value="img")
+                    expected_conditions.presence_of_element_located((By.ID, "root")))
+                element_image = element_file_viewer.find_element(
+                    by=By.ID, value="page-container").find_element(by=By.TAG_NAME, value="img")
                 image_link = element_image.get_attribute("src")
-                headers = {
-                    "cookie": cookies_str,
-                }
-                response = requests.get(image_link, headers=headers)
-                with open(full_filename, 'wb') as fout:
-                    fout.write(response.content)
-                logging.info(f"Downloaded page {i} out of {self.last_page}")
+                response = self.get_page_content(image_link, additional_headers={"Cookie": cookies_str})
+                self.save_downloaded_bytes(full_filename, response.content)
+            self.report_progress(i, self.last_page, reused=reused)
             if i < self.last_page:
                 self.get_next_page_button().click()
 

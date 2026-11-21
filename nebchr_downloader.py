@@ -29,8 +29,8 @@ class NEBCHRDownloader(LibraryDownloader):
         options.add_argument("--disable-gpu")
         options.add_argument("--headless")
         options.add_argument("--window-position=-10000,-10000")
-        self.driver = webdriver.Chrome(options=options)
-        logging.info("Initialized driver")
+        self._options = options
+        self.driver = None
 
     def __del__(self):
         if self.driver:
@@ -41,6 +41,9 @@ class NEBCHRDownloader(LibraryDownloader):
                 logging.error(f"Exception closing driver {e}")
 
     def open_site(self):
+        if self.driver is None:
+            self.driver = webdriver.Chrome(options=self._options)
+            logging.info("Initialized driver")
         self.driver.get(self.URL_LOGIN)
         element_username = self.driver.find_element(by=By.ID, value="login_email")
         element_username.clear()
@@ -62,10 +65,14 @@ class NEBCHRDownloader(LibraryDownloader):
             self.queue = queue
             self.create_folders(book_id)
             self.page_from = page_from
-            self.make_pause()
-            self.open_site()
-            self.make_pause()
-            self.download_pages(book_id)
+            full_filename = os.path.join(self.folder, str(book_id) + ".pdf")
+            if self.file_ready(full_filename, "pdf"):
+                self.report_progress(1, 1, reused=True, phase="Готово")
+            else:
+                self.make_pause()
+                self.open_site()
+                self.make_pause()
+                self.download_pages(book_id)
         except Exception as e:
             logging.error(f"Exception occurred {e}")
             error_text = str(e)
@@ -85,12 +92,10 @@ class NEBCHRDownloader(LibraryDownloader):
 
         book_link = match.group(1).strip().strip('"')
         image_link = self.URL_CDN + book_link
-        response = requests.get(image_link)
-        full_filename = os.path.join(self.folder, book_id + ".pdf")
-        if not response.ok:
-            raise Exception(f"Exception when downloading")
-        self.queue.put_nowait(0.5)
-        with open(full_filename, 'wb') as fout:
-            fout.write(response.content)
-            logging.info(f"Downloaded book")
-        self.queue.put_nowait(1)
+        full_filename = os.path.join(self.folder, str(book_id) + ".pdf")
+        self.save_pdf_stream(image_link, full_filename, headers={
+            "Cookie": cookies_str, "User-Agent": self.USER_AGENT,
+            "Referer": book_url,
+        })
+        logging.info("Downloaded book")
+        self.report_progress(1, 1, phase="PDF сохранён")

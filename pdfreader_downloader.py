@@ -19,12 +19,17 @@ class PDFReaderDownloader(LibraryDownloader):
     queue = None
     page_from = 1
     PAUSE_SEC = 20
-    ATTEMPTS_MAX = 100
+    ATTEMPTS_MAX = 3600  # One-hour ceiling with 1-second polling.
+    DOWNLOAD_POLL_SEC = 1.0
     driver = None
 
     def __init__(self, config, book_id_value):
         book_server_url = book_id_value.split("://")[-1].split("/")[0]
         self.init_non_authorized_access(config)
+        # Registry key is PDF_READER; historical output directory uses PDFReader.
+        # Respect the GUI-selected folder without changing existing book paths.
+        if config is not None and config.has_option("PDF_READER", self.CONFIG_FOLDER):
+            self.root_folder = config.get("PDF_READER", self.CONFIG_FOLDER)
         self.create_common_section_folder()
         options = webdriver.ChromeOptions()
         options.add_experimental_option("prefs", {
@@ -45,8 +50,8 @@ class PDFReaderDownloader(LibraryDownloader):
         options.add_argument("--ignore-certificate-errors")
         options.add_argument("--unsafely-treat-insecure-origin-as-secure=" + "http://" + book_server_url)
 
-        self.driver = webdriver.Chrome(options=options)
-        logging.info("Initialized driver")
+        self._options = options
+        self.driver = None
 
     def __del__(self):
         if self.driver:
@@ -63,22 +68,30 @@ class PDFReaderDownloader(LibraryDownloader):
             book_name = book_url.strip("/").split("/")[-2]
             self.create_folders(book_name)
             self.page_from = page_from
-            self.make_pause()
-            self.open_site(book_url)
-            resulting_path = self.download_pages()
-            self.move_book(resulting_path)
+            completed = [name for name in os.listdir(self.folder)
+                         if name.lower().endswith(".pdf") and
+                         self.file_ready(os.path.join(self.folder, name), "pdf")]
+            if completed:
+                self.report_progress(1, 1, reused=True, phase="PDF уже сохранён")
+            else:
+                self.open_site(book_url)
+                resulting_path = self.download_pages()
+                self.move_book(resulting_path)
+                self.report_progress(1, 1, phase="PDF сохранён")
         except Exception as e:
             logging.error(f"Exception occurred {e}")
             error_text = str(e)
         return error_text, os.path.abspath(self.folder)
 
     def open_site(self, book_url):
+        if self.driver is None:
+            self.driver = webdriver.Chrome(options=self._options)
+            logging.info("Initialized driver")
         self.driver.get(book_url)
         wait = WebDriverWait(self.driver, self.PAUSE_SEC)
         wait.until(
             expected_conditions.element_to_be_clickable(
                 (By.CSS_SELECTOR, "div[class='textLayer']")))
-        self.make_pause()
         logging.info("Site loaded")
 
     def download_pages(self):
@@ -88,17 +101,29 @@ class PDFReaderDownloader(LibraryDownloader):
         """
         resulting_path = None
         logging.info("Start downloading book to %s", self.section_folder)
+        self.check_cancel()
         self.driver.execute_script("PDFViewerApplication.downloadOrSave();")
         i = 0
         while i < self.ATTEMPTS_MAX:
-            self.make_pause()
+            self.check_cancel()
+            if getattr(self, "cancel_event", None) is not None:
+                if self.cancel_event.wait(self.DOWNLOAD_POLL_SEC):
+                    self.check_cancel()
+            else:
+                import time
+                time.sleep(self.DOWNLOAD_POLL_SEC)
             current_downloads = self.get_current_downloads()
             if not current_downloads:
                 break
             current_download_properties = current_downloads[0].split("$$$")
             current_state = int(current_download_properties[0])
             current_percentage = int(current_download_properties[1])
-            self.queue.put_nowait(current_percentage * 0.01)
+            if self.queue is not None:
+                if getattr(self, "detail_events", False):
+                    self.queue.put_nowait({"type": "progress", "completed": current_percentage,
+                                          "total": 100, "phase": "Загрузка PDF браузером", "reused": 0})
+                else:
+                    self.queue.put_nowait(current_percentage * 0.01)
             current_path = current_download_properties[2]
             if current_state != 0 or current_percentage >= 100 or current_percentage < 0:
                 resulting_path = current_path
@@ -120,4 +145,7 @@ class PDFReaderDownloader(LibraryDownloader):
 
     def move_book(self, old_path):
         book_name = os.path.basename(old_path)
-        shutil.move(old_path, os.path.join(self.folder, book_name))
+        destination = os.path.join(self.folder, book_name)
+        if not self.file_ready(old_path, "pdf"):
+            raise RuntimeError("Браузер не завершил сохранение PDF; попробуйте ещё раз")
+        os.replace(old_path, destination)

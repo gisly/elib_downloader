@@ -1,22 +1,33 @@
 @echo off
+setlocal
+cd /d "%~dp0"
+
 echo ============================================
-echo   Building elib_downloader executable...
+echo   Building elib_downloader
 echo ============================================
 echo.
 
-REM Activate virtualenv if present
-if exist venv\Scripts\activate.bat (
-    call venv\Scripts\activate.bat
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON=.venv\Scripts\python.exe"
+) else if exist "venv\Scripts\python.exe" (
+    set "PYTHON=venv\Scripts\python.exe"
+) else (
+    set "PYTHON=python"
 )
 
-REM Install dependencies
-pip install -r requirements.txt
+"%PYTHON%" -m pip install -r requirements.txt
+if errorlevel 1 goto :failed
 
-REM Build with PyInstaller
-pyinstaller elib_downloader_gui.spec --clean
+"%PYTHON%" -m PyInstaller elib_downloader_gui.spec --clean --noconfirm
+if errorlevel 1 goto :failed
 
 echo.
-echo ============================================
-echo   Done! Check the dist\ folder.
-echo ============================================
+echo Finished: dist\elib_downloader.exe
+echo Build complete.
 pause
+exit /b 0
+
+:failed
+echo Build failed. See the error message above.
+pause
+exit /b 1

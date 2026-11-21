@@ -1,493 +1,451 @@
 #!/usr/bin/env python3
-"""
-elib_downloader — Modern Desktop GUI (CustomTkinter)
-Replaces the NiceGUI web-based frontend with a native desktop application.
-All backend downloaders remain unchanged.
-"""
+"""Desktop interface for elib_downloader: resume, cancel and clear status."""
+
+from __future__ import annotations
 
 import configparser
+import logging
 import multiprocessing
 import os
 import queue
+import subprocess
+import sys
 import threading
+from datetime import datetime
+from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
 
-# ---------------------------------------------------------------------------
-# Backend imports (unchanged)
-# ---------------------------------------------------------------------------
-from libfl_downloader import LIBFLDownloader
-from nebchr_downloader import NEBCHRDownloader
-from nlrs_downloader import NLRSDownloader
-from pdfreader_downloader import PDFReaderDownloader
-from pgpb_downloader import PGPBDownloader
-from prlib_downloader import PRlibDownloader
-from rgo_downloader import RGODownloader
-from shpl_downloader import SHPLDownloader
-from kazneb_downloader import KAZNEBDownloader
+from clipboard_shortcuts import install_entry_context_menu, install_entry_shortcuts
+from resume import ResumeJournal, folder_id
+from sources import SOURCES, download
+from transfer import readable_speed, readable_eta
+from windows_keyboard import WindowsShortcutPoller, needs_windows_fallback
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-SOURCES = {
-    "NLRS":       {"needs_auth": True,  "hint": "Для ссылки вида https://e.nlrs.ru/open/1644 укажите 1644"},
-    "RGO":        {"needs_auth": False, "hint": "Укажите полную ссылку, например\nhttps://elib.rgo.ru/safe-view/123456789/231378/1/..."},
-    "PRLIB":      {"needs_auth": False, "hint": "Для ссылки вида https://www.prlib.ru/item/680723 укажите 680723"},
-    "PGPB":       {"needs_auth": False, "hint": "Для ссылки вида https://pgpb.ru/digitization/document/4375 укажите 4375"},
-    "SHPL":       {"needs_auth": False, "hint": "Для ссылки вида http://elib.shpl.ru/pages/5006468/ укажите 5006468"},
-    "PDF_READER": {"needs_auth": False, "hint": "Укажите полную ссылку, например\nhttp://62.249.142.211:8083/read/88/pdf"},
-    "LIBFL":      {"needs_auth": True,  "hint": "Укажите ID книги или заказа, например\nbookID=BJVVV_604652 ЛИБО OrderId=920010"},
-    "NEBCHR":     {"needs_auth": True,  "hint": "Укажите ID книги, например 3041"},
-    "KAZNEB":     {"needs_auth": False, "hint": "Для ссылки вида https://kazneb.kz/ru/catalogue/view/1543925\nукажите 1543925"},
+# Light interface, consistent hierarchy; no UI framework beyond CustomTkinter.
+BG = "#F4F5F3"
+SURFACE = "#FFFFFF"
+SURFACE_ALT = "#F2F5F3"
+INK = "#1D322B"
+MUTED = "#66766E"
+GREEN = "#276C53"
+GREEN_HOVER = "#1C5943"
+GREEN_SOFT = "#E5F1EA"
+BORDER = "#DCE5DF"
+ERROR = "#AE4141"
+SUCCESS = "#26794F"
+
+LIBRARY_NAMES = {
+    "NLRS": "Национальная библиотека Республики Саха",
+    "RGO": "Русское географическое общество",
+    "PRLIB": "Президентская библиотека",
+    "PGPB": "Пермская государственная библиотека",
+    "SHPL": "Государственная публичная историческая библиотека",
+    "PDF_READER": "Просмотрщик PDF",
+    "LIBFL": "Библиотека иностранной литературы",
+    "NEBCHR": "Национальная библиотека Чувашии",
+    "KAZNEB": "Казахстанская национальная электронная библиотека",
 }
-
-DOWNLOAD_FUNCTIONS = {
-    "NLRS":       lambda cfg, bid, q: NLRSDownloader(cfg).download_book(bid, q),
-    "RGO":        lambda cfg, bid, q: RGODownloader(cfg).download_book(bid, q),
-    "PRLIB":      lambda cfg, bid, q: PRlibDownloader(cfg).download_book(bid, q),
-    "PGPB":       lambda cfg, bid, q: PGPBDownloader(cfg).download_book(bid, q),
-    "SHPL":       lambda cfg, bid, q: SHPLDownloader(cfg).download_book(bid, q),
-    "PDF_READER": lambda cfg, bid, q: PDFReaderDownloader(cfg, bid).download_book(bid, q),
-    "LIBFL":      lambda cfg, bid, q: LIBFLDownloader(cfg).download_book(bid, q),
-    "NEBCHR":     lambda cfg, bid, q: NEBCHRDownloader(cfg).download_book(bid, q),
-    "KAZNEB":     lambda cfg, bid, q: KAZNEBDownloader(cfg).download_book(bid, q),
-}
-
-# ---------------------------------------------------------------------------
-# Color palette & theme
-# ---------------------------------------------------------------------------
-# Light warm palette — clean, soft, professional
-BG_LIGHT      = "#f5f2ed"
-BG_CARD       = "#ffffff"
-BG_INPUT      = "#f0ece6"
-FG_TEXT        = "#2c2c2c"
-FG_DIM         = "#7a7670"
-ACCENT         = "#c47b2b"
-ACCENT_HOVER   = "#a8641f"
-SUCCESS        = "#2d9b6e"
-ERROR          = "#c94444"
-BORDER         = "#ddd7ce"
-DISABLED_BG    = "#e8e4de"
 
 
 class App(ctk.CTk):
-    """Main application window."""
-
     def __init__(self):
         super().__init__()
-
-        # ---- Window setup ----
         self.title("elib_downloader")
-        self.geometry("960x640")
-        self.minsize(820, 560)
-        self.configure(fg_color=BG_LIGHT)
+        self.geometry("1040x690")
+        self.minsize(860, 610)
+        self.configure(fg_color=BG)
 
-        # State
         self.folder = os.path.abspath(".")
+        self.last_result_folder = self.folder
         self.is_downloading = False
         self.queue: queue.Queue | None = None
+        self.cancel_event: threading.Event | None = None
+        self._keyboard_poller = None
+        self._context_menus = []
 
         self._build_ui()
         self._bind_clipboard_shortcuts()
         self._on_source_changed()
         self._poll_progress()
 
-    # =======================================================================
-    # Clipboard shortcuts (Ctrl+C/V/X/A for both Latin and Cyrillic layouts)
-    # =======================================================================
-    def _bind_clipboard_shortcuts(self):
-        """Bind standard clipboard shortcuts globally.
+    def _label(self, parent, text):
+        return ctk.CTkLabel(parent, text=text, text_color=INK,
+                            font=ctk.CTkFont(size=13, weight="bold"), anchor="w")
 
-        CustomTkinter on Windows sometimes swallows Ctrl+C / Ctrl+V.
-        We also handle Cyrillic layout via a generic KeyPress handler,
-        since tkinter can't bind Unicode keysyms directly on Windows.
-        """
-        for widget_class in (ctk.CTkEntry, ctk.CTkTextbox):
-            # Latin keys
-            self.bind_class(widget_class.__name__, "<Control-a>", self._select_all)
-            self.bind_class(widget_class.__name__, "<Control-A>", self._select_all)
-            self.bind_class(widget_class.__name__, "<Control-c>", self._copy)
-            self.bind_class(widget_class.__name__, "<Control-C>", self._copy)
-            self.bind_class(widget_class.__name__, "<Control-v>", self._paste)
-            self.bind_class(widget_class.__name__, "<Control-V>", self._paste)
-            self.bind_class(widget_class.__name__, "<Control-x>", self._cut)
-            self.bind_class(widget_class.__name__, "<Control-X>", self._cut)
-            # Cyrillic layout: catch via generic Control+KeyPress and check keycode
-            # On Windows, physical keys produce the same keycode regardless of layout
-            # C=46, V=47, X=53, A=38 (these are X11-style keycodes that tk uses)
-            self.bind_class(widget_class.__name__, "<Control-KeyPress>", self._on_ctrl_keypress)
+    def _entry(self, parent, placeholder, show=None):
+        return ctk.CTkEntry(parent, placeholder_text=placeholder,
+                            fg_color=SURFACE, text_color=INK, border_color=BORDER,
+                            placeholder_text_color=MUTED, height=43,
+                            font=ctk.CTkFont(size=14), corner_radius=9, show=show)
 
-    def _on_ctrl_keypress(self, event):
-        """Handle Ctrl+key for Cyrillic layout.
-
-        When Russian layout is active, pressing physical C/V/X/A keys
-        produces Cyrillic с/м/ч/ф characters. We map those to clipboard ops.
-        """
-        char = event.char.lower() if event.char else ""
-        cyrillic_map = {
-            "\u0441": self._copy,       # с → copy
-            "\u043c": self._paste,      # м → paste
-            "\u0447": self._cut,        # ч → cut
-            "\u0444": self._select_all, # ф → select all
-        }
-        handler = cyrillic_map.get(char)
-        if handler:
-            return handler(event)
-
-    @staticmethod
-    def _copy(event):
-        widget = event.widget
-        try:
-            if hasattr(widget, "selection_get"):
-                widget.clipboard_clear()
-                widget.clipboard_append(widget.selection_get())
-        except Exception:
-            pass
-        return "break"
-
-    @staticmethod
-    def _paste(event):
-        widget = event.widget
-        try:
-            text = widget.clipboard_get()
-            if hasattr(widget, "delete") and hasattr(widget, "insert"):
-                try:
-                    widget.delete("sel.first", "sel.last")
-                except Exception:
-                    pass
-                widget.insert("insert", text)
-        except Exception:
-            pass
-        return "break"
-
-    @staticmethod
-    def _cut(event):
-        widget = event.widget
-        try:
-            if hasattr(widget, "selection_get"):
-                widget.clipboard_clear()
-                widget.clipboard_append(widget.selection_get())
-                try:
-                    widget.delete("sel.first", "sel.last")
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        return "break"
-
-    @staticmethod
-    def _select_all(event):
-        widget = event.widget
-        try:
-            if isinstance(widget, (ctk.CTkEntry,)):
-                widget.select_range(0, "end")
-                widget.icursor("end")
-            elif hasattr(widget, "tag_add"):
-                widget.tag_add("sel", "1.0", "end")
-        except Exception:
-            pass
-        return "break"
-
-    # =======================================================================
-    # UI Construction
-    # =======================================================================
     def _build_ui(self):
-        # ---------- Header ----------
-        header = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=56)
+        header = ctk.CTkFrame(self, fg_color=INK, corner_radius=0, height=82)
         header.pack(fill="x")
         header.pack_propagate(False)
+        ctk.CTkLabel(header, text="elib_downloader", text_color="#FFFFFF",
+                     font=ctk.CTkFont(size=23, weight="bold")).pack(
+                         anchor="w", padx=30, pady=(15, 0))
+        ctk.CTkLabel(header, text="Электронные библиотеки — без потери прогресса",
+                     text_color="#C9DDD1", font=ctk.CTkFont(size=12)).pack(
+                         anchor="w", padx=31)
 
-        ctk.CTkLabel(
-            header, text="📚  elib_downloader",
-            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
-            text_color=ACCENT
-        ).pack(side="left", padx=20)
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=22)
+        body.grid_columnconfigure(0, weight=6, uniform="columns")
+        body.grid_columnconfigure(1, weight=4, uniform="columns")
+        body.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            header, text="Скачивание книг из электронных библиотек",
-            font=ctk.CTkFont(size=13), text_color=FG_DIM
-        ).pack(side="left", padx=8)
+        left = ctk.CTkFrame(body, fg_color=SURFACE, corner_radius=16,
+                            border_width=1, border_color=BORDER)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        controls = ctk.CTkFrame(left, fg_color="transparent")
+        controls.pack(fill="both", expand=True, padx=27, pady=24)
 
-        # ---------- Main content area with two columns ----------
-        body = ctk.CTkFrame(self, fg_color=BG_LIGHT)
-        body.pack(fill="both", expand=True, padx=20, pady=(16, 20))
-        body.columnconfigure(0, weight=1, minsize=360)
-        body.columnconfigure(1, weight=1, minsize=360)
-        body.rowconfigure(0, weight=1)
+        ctk.CTkLabel(controls, text="Новая загрузка", text_color=INK,
+                     font=ctk.CTkFont(size=21, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(controls, text="Оставшиеся страницы скачаются автоматически",
+                     text_color=MUTED, font=ctk.CTkFont(size=12)).pack(
+                         anchor="w", pady=(2, 22))
 
-        # ===== LEFT COLUMN — controls =====
-        left = ctk.CTkFrame(body, fg_color=BG_CARD, corner_radius=14, border_width=1, border_color=BORDER)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-
-        inner_left = ctk.CTkFrame(left, fg_color="transparent")
-        inner_left.pack(fill="both", expand=True, padx=24, pady=24)
-
-        # Source selector
-        self._section_label(inner_left, "Источник")
-        self.source_var = ctk.StringVar(value="NLRS")
+        self._label(controls, "1. Библиотека").pack(anchor="w", pady=(0, 7))
+        self.source_var = ctk.StringVar(value="PRLIB")
         self.source_menu = ctk.CTkOptionMenu(
-            inner_left, variable=self.source_var,
-            values=list(SOURCES.keys()),
+            controls, variable=self.source_var, values=list(SOURCES),
             command=lambda _: self._on_source_changed(),
-            fg_color=BG_INPUT, button_color=ACCENT, button_hover_color=ACCENT_HOVER,
-            dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_INPUT,
-            text_color=FG_TEXT, dropdown_text_color=FG_TEXT,
-            font=ctk.CTkFont(size=14), width=280, corner_radius=8
-        )
-        self.source_menu.pack(anchor="w", pady=(0, 14))
+            fg_color=GREEN, button_color=GREEN, button_hover_color=GREEN_HOVER,
+            dropdown_fg_color=SURFACE, dropdown_text_color=INK,
+            dropdown_hover_color=GREEN_SOFT, text_color="#FFFFFF",
+            width=300, height=40, corner_radius=9,
+            font=ctk.CTkFont(size=14, weight="bold"))
+        self.source_menu.pack(fill="x")
+        self.source_name_label = ctk.CTkLabel(
+            controls, text="", text_color=MUTED, anchor="w", wraplength=430,
+            font=ctk.CTkFont(size=12))
+        self.source_name_label.pack(fill="x", pady=(6, 16))
 
-        # Login
-        self._section_label(inner_left, "Логин")
-        self.login_entry = self._make_entry(inner_left, "Логин (емейл)")
-        self.login_entry.pack(fill="x", pady=(0, 10))
+        self._label(controls, "2. Ссылка или номер книги").pack(anchor="w", pady=(0, 7))
+        self.book_id_entry = self._entry(controls, "Вставьте ссылку на книгу")
+        self.book_id_entry.pack(fill="x")
+        self.book_id_entry.bind("<KeyRelease>", lambda _e: self._refresh_resume_hint(), add="+")
+        self.book_id_entry.bind("<FocusOut>", lambda _e: self._refresh_resume_hint(), add="+")
+        self.source_hint = ctk.CTkLabel(controls, text="", text_color=MUTED,
+                                        font=ctk.CTkFont(size=12),
+                                        justify="left", anchor="w", wraplength=430)
+        self.source_hint.pack(fill="x", pady=(6, 12))
 
-        # Password
-        self._section_label(inner_left, "Пароль")
-        self.password_entry = self._make_entry(inner_left, "Пароль", show="•")
-        self.password_entry.pack(fill="x", pady=(0, 10))
+        self.credentials = ctk.CTkFrame(controls, fg_color=SURFACE_ALT, corner_radius=10)
+        credentials_inner = ctk.CTkFrame(self.credentials, fg_color="transparent")
+        credentials_inner.pack(fill="x", padx=12, pady=12)
+        self._label(credentials_inner, "Доступ к библиотеке").pack(anchor="w", pady=(0, 7))
+        self.login_entry = self._entry(credentials_inner, "Логин или email")
+        self.login_entry.pack(fill="x", pady=(0, 7))
+        self.password_entry = self._entry(credentials_inner, "Пароль", show="•")
+        self.password_entry.pack(fill="x")
 
-        # Book ID
-        self._section_label(inner_left, "Идентификатор книги")
-        self.book_id_entry = self._make_entry(inner_left, "Идентификатор книги")
-        self.book_id_entry.pack(fill="x", pady=(0, 16))
-
-        # Folder chooser
-        folder_frame = ctk.CTkFrame(inner_left, fg_color="transparent")
-        folder_frame.pack(fill="x", pady=(0, 18))
-
-        ctk.CTkButton(
-            folder_frame, text="📁 Папка", width=100,
-            fg_color=BG_INPUT, hover_color=BORDER, text_color=FG_TEXT,
-            border_width=1, border_color=BORDER, corner_radius=8,
-            font=ctk.CTkFont(size=13),
-            command=self._pick_folder
-        ).pack(side="left")
-
+        self._label(controls, "3. Куда сохранить").pack(anchor="w", pady=(13, 7))
+        path_row = ctk.CTkFrame(controls, fg_color="transparent")
+        path_row.pack(fill="x")
         self.folder_label = ctk.CTkLabel(
-            folder_frame, text=self._truncate_path(self.folder),
-            font=ctk.CTkFont(size=12), text_color=FG_DIM, anchor="w"
-        )
-        self.folder_label.pack(side="left", padx=10, fill="x", expand=True)
+            path_row, text=self._display_path(self.folder), anchor="w",
+            text_color=MUTED, font=ctk.CTkFont(size=12))
+        self.folder_label.pack(side="left", expand=True, fill="x")
+        ctk.CTkButton(path_row, text="Выбрать…", width=110, height=34,
+                      fg_color=SURFACE_ALT, hover_color=BORDER, text_color=INK,
+                      border_color=BORDER, border_width=1, corner_radius=8,
+                      command=self._pick_folder).pack(side="right")
 
-        # Download button
+        button_row = ctk.CTkFrame(controls, fg_color="transparent")
+        button_row.pack(fill="x", pady=(22, 0))
         self.download_btn = ctk.CTkButton(
-            inner_left, text="⬇  Скачать книгу", height=44,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            text_color=BG_CARD, font=ctk.CTkFont(size=15, weight="bold"),
-            corner_radius=10,
-            command=self._start_download
-        )
-        self.download_btn.pack(fill="x", pady=(0, 10))
+            button_row, text="Скачать / продолжить", fg_color=GREEN,
+            hover_color=GREEN_HOVER, height=47, corner_radius=10,
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self._start_download)
+        self.download_btn.pack(side="left", expand=True, fill="x", padx=(0, 8))
+        self.cancel_btn = ctk.CTkButton(
+            button_row, text="Остановить", width=108, height=47,
+            fg_color=SURFACE_ALT, hover_color=BORDER, text_color=INK,
+            corner_radius=10, state="disabled", command=self._cancel_download)
+        self.cancel_btn.pack(side="right")
 
-        # Progress bar
+        right = ctk.CTkFrame(body, fg_color=SURFACE, corner_radius=16,
+                             border_width=1, border_color=BORDER)
+        right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        pane = ctk.CTkFrame(right, fg_color="transparent")
+        pane.pack(fill="both", expand=True, padx=24, pady=24)
+        ctk.CTkLabel(pane, text="Состояние загрузки", text_color=INK,
+                     font=ctk.CTkFont(size=19, weight="bold")).pack(anchor="w")
+        self.status_tag = ctk.CTkLabel(
+            pane, text="Ожидание", fg_color=SURFACE_ALT,
+            text_color=GREEN, corner_radius=7, height=27,
+            font=ctk.CTkFont(size=12, weight="bold"))
+        self.status_tag.pack(anchor="w", pady=(12, 18), ipadx=12)
+
+        progress_row = ctk.CTkFrame(pane, fg_color="transparent")
+        progress_row.pack(fill="x")
+        self.progress_summary = ctk.CTkLabel(
+            progress_row, text="Готово к скачиванию", text_color=INK,
+            anchor="w", font=ctk.CTkFont(size=14, weight="bold"))
+        self.progress_summary.pack(side="left", fill="x", expand=True)
+        self.progress_percent = ctk.CTkLabel(
+            progress_row, text="0%", text_color=GREEN,
+            font=ctk.CTkFont(size=14, weight="bold"))
+        self.progress_percent.pack(side="right")
+
         self.progress_bar = ctk.CTkProgressBar(
-            inner_left, progress_color=ACCENT, fg_color=BG_INPUT,
-            height=6, corner_radius=3
-        )
+            pane, fg_color=SURFACE_ALT, progress_color=GREEN,
+            height=11, corner_radius=6)
         self.progress_bar.set(0)
-        self.progress_bar.pack(fill="x", pady=(0, 6))
-        self.progress_bar.pack_forget()  # hidden initially
-
-        # Status label
+        self.progress_bar.pack(fill="x", pady=(10, 7))
+        self.transfer_label = ctk.CTkLabel(
+            pane, text="Скорость: —    ·    Осталось: —", text_color=MUTED,
+            anchor="w", font=ctk.CTkFont(size=12))
+        self.transfer_label.pack(fill="x", pady=(0, 9))
         self.status_label = ctk.CTkLabel(
-            inner_left, text="", font=ctk.CTkFont(size=12),
-            text_color=FG_DIM, anchor="w", wraplength=320
-        )
+            pane, text="Выберите библиотеку и укажите книгу.",
+            text_color=MUTED, justify="left", anchor="w", wraplength=320,
+            font=ctk.CTkFont(size=12))
         self.status_label.pack(fill="x")
+        self.resume_hint = ctk.CTkLabel(
+            pane, text="", text_color=GREEN, justify="left", anchor="w",
+            wraplength=320, font=ctk.CTkFont(size=12))
+        self.resume_hint.pack(fill="x", pady=(10, 0))
 
-        # ===== RIGHT COLUMN — help / source info =====
-        right = ctk.CTkFrame(body, fg_color=BG_CARD, corner_radius=14, border_width=1, border_color=BORDER)
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        ctk.CTkFrame(pane, height=1, fg_color=BORDER).pack(fill="x", pady=20)
+        ctk.CTkLabel(pane, text="Ход работы", text_color=INK,
+                     font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", pady=(0, 9))
+        self.activity = ctk.CTkTextbox(
+            pane, fg_color=SURFACE_ALT, text_color=INK, border_width=0,
+            corner_radius=9, font=ctk.CTkFont(size=12), wrap="word", height=125)
+        self.activity.pack(fill="both", expand=True)
+        self.activity.insert("end", "Здесь появятся этапы загрузки и сообщения об ошибках.\n")
+        self.activity.configure(state="disabled")
+        ctk.CTkButton(
+            pane, text="Открыть папку с файлами", height=38,
+            fg_color=SURFACE_ALT, hover_color=BORDER,
+            text_color=INK, corner_radius=8,
+            command=self._open_folder).pack(fill="x", pady=(15, 0))
 
-        inner_right = ctk.CTkFrame(right, fg_color="transparent")
-        inner_right.pack(fill="both", expand=True, padx=24, pady=24)
-
-        ctk.CTkLabel(
-            inner_right, text="Справка по источникам",
-            font=ctk.CTkFont(size=16, weight="bold"), text_color=FG_TEXT
-        ).pack(anchor="w", pady=(0, 14))
-
-        # Scrollable list of sources
-        scroll = ctk.CTkScrollableFrame(
-            inner_right, fg_color="transparent",
-            scrollbar_button_color=BORDER, scrollbar_button_hover_color=FG_DIM
-        )
-        scroll.pack(fill="both", expand=True)
-
-        for name, info in SOURCES.items():
-            card = ctk.CTkFrame(scroll, fg_color=BG_INPUT, corner_radius=10, border_width=1, border_color=BORDER)
-            card.pack(fill="x", pady=(0, 8))
-
-            card_inner = ctk.CTkFrame(card, fg_color="transparent")
-            card_inner.pack(fill="x", padx=14, pady=10)
-
-            title_row = ctk.CTkFrame(card_inner, fg_color="transparent")
-            title_row.pack(fill="x")
-
-            ctk.CTkLabel(
-                title_row, text=name,
-                font=ctk.CTkFont(size=14, weight="bold"), text_color=ACCENT
-            ).pack(side="left")
-
-            if info["needs_auth"]:
-                ctk.CTkLabel(
-                    title_row, text="🔒 Нужна регистрация",
-                    font=ctk.CTkFont(size=11), text_color=FG_DIM
-                ).pack(side="right")
-
-            ctk.CTkLabel(
-                card_inner, text=info["hint"],
-                font=ctk.CTkFont(size=12), text_color=FG_DIM,
-                anchor="w", justify="left", wraplength=360
-            ).pack(fill="x", pady=(4, 0))
-
-        # ---------- Hint bar for selected source ----------
-        self.hint_frame = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=0, height=36)
-        self.hint_frame.pack(fill="x")
-        self.hint_frame.pack_propagate(False)
-
-        self.hint_label = ctk.CTkLabel(
-            self.hint_frame, text="",
-            font=ctk.CTkFont(size=12), text_color=FG_DIM
-        )
-        self.hint_label.pack(side="left", padx=20)
-
-    # =======================================================================
-    # Helpers
-    # =======================================================================
-    @staticmethod
-    def _section_label(parent, text):
-        ctk.CTkLabel(
-            parent, text=text,
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=FG_DIM
-        ).pack(anchor="w", pady=(0, 4))
+    def _bind_clipboard_shortcuts(self):
+        entries = (self.login_entry, self.password_entry, self.book_id_entry)
+        for entry in entries:
+            self._context_menus.append(install_entry_context_menu(entry))
+            if os.name != "nt":
+                install_entry_shortcuts(entry)
+        if os.name == "nt":
+            patchlevel = self.tk.call("info", "patchlevel")
+            if needs_windows_fallback(patchlevel):
+                try:
+                    self._keyboard_poller = WindowsShortcutPoller(self, entries)
+                except OSError:
+                    logging.exception("Не удалось включить обработку горячих клавиш")
 
     @staticmethod
-    def _make_entry(parent, placeholder, show=None):
-        entry = ctk.CTkEntry(
-            parent, placeholder_text=placeholder,
-            fg_color=BG_INPUT, border_color=BORDER, text_color=FG_TEXT,
-            placeholder_text_color=FG_DIM,
-            font=ctk.CTkFont(size=14), height=38, corner_radius=8,
-            show=show
-        )
-        return entry
+    def _display_path(value, limit=46):
+        return value if len(value) <= limit else "…" + value[-limit + 1:]
 
-    @staticmethod
-    def _truncate_path(path, max_len=45):
-        if len(path) <= max_len:
-            return path
-        return "…" + path[-(max_len - 1):]
+    def _log(self, text):
+        self.activity.configure(state="normal")
+        self.activity.insert("end", f"{datetime.now():%H:%M}  {text}\n")
+        self.activity.see("end")
+        self.activity.configure(state="disabled")
 
-    # =======================================================================
-    # Callbacks
-    # =======================================================================
     def _on_source_changed(self):
         src = self.source_var.get()
-        info = SOURCES[src]
-        needs_auth = info["needs_auth"]
-
-        if needs_auth:
-            self.login_entry.configure(state="normal", fg_color=BG_INPUT)
-            self.password_entry.configure(state="normal", fg_color=BG_INPUT)
+        self.source_name_label.configure(text=LIBRARY_NAMES.get(src, src))
+        self.source_hint.configure(text=SOURCES[src].hint)
+        if SOURCES[src].needs_auth:
+            self.credentials.pack(fill="x", pady=(0, 0), after=self.source_hint)
         else:
+            self.credentials.pack_forget()
             self.login_entry.delete(0, "end")
             self.password_entry.delete(0, "end")
-            self.login_entry.configure(state="disabled", fg_color=DISABLED_BG)
-            self.password_entry.configure(state="disabled", fg_color=DISABLED_BG)
-
-        self.hint_label.configure(text=f"{src}: {info['hint'].splitlines()[0]}")
+        self._refresh_resume_hint()
 
     def _pick_folder(self):
-        path = filedialog.askdirectory(initialdir=self.folder)
-        if path:
-            self.folder = path
-            self.folder_label.configure(text=self._truncate_path(self.folder))
+        folder = filedialog.askdirectory(initialdir=self.folder)
+        if folder:
+            self.folder = folder
+            self.folder_label.configure(text=self._display_path(folder))
+            self._refresh_resume_hint()
+
+    def _resume_folder(self):
+        value = self.book_id_entry.get().strip()
+        if not value:
+            return None
+        try:
+            return os.path.join(self.folder, folder_id(self.source_var.get(), value))
+        except ValueError:
+            return None
+
+    def _refresh_resume_hint(self):
+        target = self._resume_folder()
+        state = ResumeJournal.read(target) if target else None
+        if state and state.get("status") != "completed":
+            done, total = state.get("completed", 0), state.get("total")
+            suffix = f" из {total}" if total is not None else ""
+            self.resume_hint.configure(
+                text=f"↻ Найдена незавершённая загрузка: {done}{suffix}. "
+                     "Готовые файлы будут проверены и пропущены.")
+        elif state and state.get("status") == "completed":
+            self.resume_hint.configure(text="✓ Книга уже скачивалась. Готовые файлы будут проверены.")
+        else:
+            self.resume_hint.configure(text="Докачка включена автоматически для всех библиотек.")
 
     def _start_download(self):
         if self.is_downloading:
             return
-
-        src = self.source_var.get()
-        book_id = self.book_id_entry.get().strip()
-        if not book_id:
-            self._set_status("Укажите идентификатор книги", ERROR)
+        source = self.source_var.get()
+        book = self.book_id_entry.get().strip()
+        if not book:
+            self._set_status("Вставьте ссылку или идентификатор книги.", ERROR)
             return
-
-        if SOURCES[src]["needs_auth"]:
-            if not self.login_entry.get().strip() or not self.password_entry.get().strip():
-                self._set_status("Укажите логин и пароль", ERROR)
-                return
-
-        self.is_downloading = True
-        self.download_btn.configure(state="disabled", fg_color=BORDER)
-        self.progress_bar.set(0)
-        self.progress_bar.pack(fill="x", pady=(0, 6))
-        self._set_status("Скачивание… Пожалуйста, подождите.", FG_DIM)
-
-        # Build config
+        if SOURCES[source].needs_auth and (not self.login_entry.get().strip() or
+                                          not self.password_entry.get().strip()):
+            self._set_status("Для этой библиотеки нужны логин и пароль.", ERROR)
+            return
         config = configparser.ConfigParser()
-        config.read_string(f"[{src}]")
-        config[src]["login"] = self.login_entry.get()
-        config[src]["password"] = self.password_entry.get()
-        config[src]["folder"] = self.folder
-
+        config.add_section(source)
+        config.set(source, "login", self.login_entry.get())
+        config.set(source, "password", self.password_entry.get())
+        config.set(source, "folder", self.folder)
+        self.is_downloading = True
+        self.cancel_event = threading.Event()
         self.queue = queue.Queue()
-
-        thread = threading.Thread(
+        self.source_menu.configure(state="disabled")
+        self.download_btn.configure(state="disabled")
+        self.cancel_btn.configure(state="normal")
+        self.status_tag.configure(text="Загружается", text_color=GREEN)
+        self.progress_summary.configure(text="Получение данных…")
+        self.progress_percent.configure(text="0%")
+        self.progress_bar.set(0)
+        self.transfer_label.configure(text="Скорость: —    ·    Осталось: —")
+        self._set_status("Подключаемся к библиотеке…")
+        self._log(f"Начало: {source} — {book[:90]}")
+        self.last_result_folder = self._resume_folder() or self.folder
+        worker = threading.Thread(
             target=self._download_thread,
-            args=(src, config, book_id, self.queue),
-            daemon=True,
-        )
-        thread.start()
+            args=(source, config, book, self.queue, self.cancel_event), daemon=True)
+        worker.start()
 
-    def _download_thread(self, source, config, book_id, q: queue.Queue):
+    @staticmethod
+    def _download_thread(source, config, book, output, cancel_event):
         try:
-            func = DOWNLOAD_FUNCTIONS[source]
-            error_text, result = func(config, book_id, q)
-            if error_text:
-                self.after(0, self._download_finished, f"Ошибка: {error_text}", ERROR)
-            else:
-                self.after(0, self._download_finished, f"Книга сохранена в {result}", SUCCESS)
-        except Exception as e:
-            self.after(0, self._download_finished, f"Ошибка: {e}", ERROR)
+            error, folder = download(source, config, book, output, cancel_event)
+            output.put_nowait(("finished", error, folder))
+        except Exception as exc:
+            logging.exception("Ошибка скачивания")
+            output.put_nowait(("finished", str(exc), None))
 
-    def _download_finished(self, message, color):
+    def _cancel_download(self):
+        if not self.is_downloading or self.cancel_event is None:
+            return
+        self.cancel_event.set()
+        self.cancel_btn.configure(state="disabled")
+        self.status_tag.configure(text="Остановка…")
+        self._log("Запрошена остановка. Сохранённые файлы останутся на диске.")
+        self._set_status("Ожидаем завершения текущего запроса…")
+
+    def _download_finished(self, error, folder):
         self.is_downloading = False
-        self.download_btn.configure(state="normal", fg_color=ACCENT)
-        self.progress_bar.pack_forget()
-        self._set_status(message, color)
+        self.source_menu.configure(state="normal")
+        self.download_btn.configure(state="normal")
+        self.cancel_btn.configure(state="disabled")
+        cancelled = bool(self.cancel_event and self.cancel_event.is_set())
+        if folder:
+            self.last_result_folder = folder
+        if cancelled:
+            self.status_tag.configure(text="Остановлено", text_color=MUTED)
+            self._set_status("Загрузка остановлена. Нажмите «Скачать / продолжить», чтобы докачать.")
+            self._log("Остановлено. Прогресс сохранён.")
+        elif error:
+            self.status_tag.configure(text="Ошибка", text_color=ERROR)
+            self._set_status(error, ERROR)
+            self._log(f"Ошибка: {error}")
+        else:
+            self.status_tag.configure(text="Готово", text_color=SUCCESS)
+            self.progress_bar.set(1)
+            self.progress_percent.configure(text="100%")
+            self._set_status(f"Сохранено в: {folder}", SUCCESS)
+            self._log("Готово. Файлы находятся в выбранной папке.")
+        self._refresh_resume_hint()
 
-    def _set_status(self, text, color=FG_DIM):
+    def _set_status(self, text, color=MUTED):
         self.status_label.configure(text=text, text_color=color)
 
-    # =======================================================================
-    # Progress polling
-    # =======================================================================
+    def _update_transfer(self, event):
+        speed = readable_speed(event.get("speed_bps"))
+        eta = readable_eta(event.get("eta_seconds"))
+        self.transfer_label.configure(text=f"Скорость: {speed}    ·    Осталось: {eta}")
+
     def _poll_progress(self):
-        if self.is_downloading and self.queue:
+        if self.queue is not None:
             try:
-                while not self.queue.empty():
-                    val = self.queue.get_nowait()
-                    if isinstance(val, (int, float)):
-                        self.progress_bar.set(min(val, 1.0))
-            except Exception:
+                while True:
+                    event = self.queue.get_nowait()
+                    if isinstance(event, dict) and event.get("type") == "progress":
+                        done = event["completed"]
+                        total = max(1, event["total"])
+                        fraction = max(0.0, min(done / total, 1.0))
+                        self.progress_bar.set(fraction)
+                        self.progress_percent.configure(text=f"{fraction:.0%}")
+                        self.progress_summary.configure(text=f"{done} из {total}")
+                        reused = event.get("reused", 0)
+                        phase = event.get("phase", "Загрузка страниц")
+                        extra = f" · готовых файлов пропущено: {reused}" if reused else ""
+                        self._set_status(phase + extra)
+                        self._update_transfer(event)
+                    elif isinstance(event, dict) and event.get("type") == "transfer":
+                        self._set_status(
+                            f"{event['phase']}: {event['detail']} из {event['detail_total']}")
+                        self._update_transfer(event)
+                    elif isinstance(event, dict) and event.get("type") == "metrics":
+                        self._update_transfer(event)
+                    elif isinstance(event, (int, float)):
+                        value = max(0.0, min(float(event), 1.0))
+                        self.progress_bar.set(value)
+                        self.progress_percent.configure(text=f"{value:.0%}")
+                    elif isinstance(event, tuple) and event[0] == "finished":
+                        self._download_finished(event[1], event[2])
+            except queue.Empty:
                 pass
-        self.after(100, self._poll_progress)
+        try:
+            self.after(100, self._poll_progress)
+        except Exception:
+            pass
+
+    def _open_folder(self):
+        folder = self.last_result_folder
+        if not os.path.isdir(folder):
+            folder = self.folder
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except OSError as exc:
+            self._set_status(f"Не удалось открыть папку: {exc}", ERROR)
+
+    def destroy(self):
+        if self.cancel_event is not None:
+            self.cancel_event.set()
+        if self._keyboard_poller is not None:
+            self._keyboard_poller.close()
+            self._keyboard_poller = None
+        super().destroy()
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 def main():
     ctk.set_appearance_mode("light")
     ctk.set_default_color_theme("dark-blue")
-
     app = App()
     app.mainloop()
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()  # Required for PyInstaller on Windows
+    multiprocessing.freeze_support()
     main()

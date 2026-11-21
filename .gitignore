@@ -1,0 +1,29 @@
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Builds
+build/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Interrupted downloads (progress belongs to local books)
+.download_state.json
+*.part
+*.part.json

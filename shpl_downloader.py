@@ -16,6 +16,7 @@ class SHPLDownloader(LibraryDownloader):
     queue = None
     page_from = 1
     PAUSE_SEC = 1
+    PARALLEL_FILES = 3
 
     def __init__(self, config):
         self.init_non_authorized_access(config)
@@ -34,11 +35,26 @@ class SHPLDownloader(LibraryDownloader):
 
     def process_book(self, book_id):
         pages = self.extract_page_ids(book_id)
+        if not pages:
+            raise RuntimeError("Не удалось найти страницы книги на сайте библиотеки")
         total_page_num = len(pages)
-        for i, page in enumerate(pages):
-            self.queue.put_nowait(round(i / total_page_num, 2))
-            self.download_page(page, i)
-            self.make_pause()
+        ext = ".png" if self.current_section == "KAZNEB" else ".jpeg"
+        completed = 0
+
+        def fetch(item):
+            i, page = item
+            target = os.path.join(self.folder, f"{i:05d}{ext}")
+            cached = self.file_ready(target)
+            if not cached:
+                self.download_page(page, i)
+            return cached
+
+        def on_done(item, cached):
+            nonlocal completed
+            completed += 1
+            self.report_progress(completed, total_page_num, reused=cached)
+
+        self.parallel(enumerate(pages), fetch, on_done=on_done)
 
     def extract_page_ids(self, book_id):
         url = self.SHPL_URL + str(book_id)

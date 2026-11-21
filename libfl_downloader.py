@@ -24,6 +24,7 @@ class LIBFLDownloader(LibraryDownloader):
     current_section = "LIBFL"
     queue = None
     page_from = 1
+    PARALLEL_FILES = 2
 
     def __init__(self, config):
         self.init_authorized_access(config)
@@ -83,7 +84,7 @@ class LIBFLDownloader(LibraryDownloader):
         for i in range(0, 3):
             main_page = self.download_html(book_url, additional_headers={"Cookie": cookies_str, })
             self.make_pause()
-            match = re.search('var exemplar = (\{.+?});',
+            match = re.search(r'var exemplar = (\{.+?});',
                               main_page.text, re.S)
             if match:
                 break
@@ -98,19 +99,21 @@ class LIBFLDownloader(LibraryDownloader):
         self.last_page = len(jpeg_files)
         n = self.last_page + 1
 
-        for i in tqdm(range(self.page_from, self.last_page + 1)):
-            self.queue.put_nowait(round(i / n, 2))
-            logging.info(f"Downloading page {i} out of {self.last_page}")
+        completed = self.page_from - 1
+
+        def fetch(i):
             filename = str(i).zfill(4) + ".jpg"
             full_filename = os.path.join(self.folder, filename)
+            reused = self.file_ready(full_filename)
+            if not reused:
+                image_link = self.URL_CDN + hq + jpeg_files[i - 1]
+                response = self.get_page_content(image_link, additional_headers=self.HEADERS)
+                self.save_downloaded_bytes(full_filename, response.content)
+            return reused
 
-            self.make_pause()
-            image_link = self.URL_CDN + hq + jpeg_files [i-1]
-            response = requests.get(image_link, headers=self.HEADERS)
-            if not response.ok:
-                raise Exception(f"Exception when downloading page {i} out of {self.last_page}")
-            with open(full_filename, 'wb') as fout:
-                fout.write(response.content)
-                logging.info(f"Downloaded page {i} out of {self.last_page}")
-            if i >= self.last_page:
-                break
+        def on_done(i, reused):
+            nonlocal completed
+            completed += 1
+            self.report_progress(completed, self.last_page, reused=reused)
+
+        self.parallel(range(self.page_from, self.last_page + 1), fetch, on_done=on_done)
