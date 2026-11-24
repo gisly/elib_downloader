@@ -198,3 +198,75 @@ def test_end_to_end_mock_download_of_example_item(tmp_path):
     assert (tmp_path / "PRLIB_363162" / "first.jpg").exists()
     assert d.download_jpeg.call_count == 1
     assert 1.0 in list(d.queue.queue)
+
+
+def test_prlib_5938488_complete_cached_grid_disagrees_with_metadata(tmp_path):
+    """Regression for PRLIB_363144 page 226: real image is 10x7, not 13x19."""
+    d = downloader(tmp_path)
+    d.folder = str(tmp_path)
+    tile_folder = tmp_path / "5938488_doc1"
+    tile_folder.mkdir()
+    for index in range(70):
+        col, row = index % 10, index // 10
+        width = 46 if col == 9 else 256
+        height = 88 if row == 6 else 256
+        Image.new("RGB", (width, height), (10, 30, 80)).save(
+            tile_folder / f"{index:05d}.jpg", "JPEG")
+    page = {"f": "5938488_doc1.tiff", "d": [{"w": 3200, "h": 4700}]}
+    with patch.object(d, "download_jpeg", side_effect=AssertionError("Already cached!")):
+        actual_width = d.download_page("A", "B", page)
+    assert actual_width == 2350
+    assert d._cached_complete_grid(str(tile_folder)) == (2350, 1624)
+    out = tmp_path / "5938488_doc1.jpg"
+    d.concatenate_page_tiles(str(out), str(tile_folder), actual_width)
+    with Image.open(out) as image:
+        assert image.size == (2350, 1624)
+
+
+def test_prlib_recovers_when_first_404_is_after_complete_image(tmp_path):
+    d = downloader(tmp_path)
+    d.TILE_SIZE = 4
+    d.PARALLEL_FILES = 3
+    d.folder = str(tmp_path)
+    requested = []
+
+    def fetch(folder, index, _url):
+        requested.append(index)
+        if index >= 6:
+            return False
+        width = 2 if index % 3 == 2 else 4
+        height = 1 if index >= 3 else 4
+        Image.new("RGB", (width, height), "blue").save(
+            __import__('os').path.join(folder, f"{index:05d}.jpg"), "JPEG")
+        return True
+
+    d.download_jpeg = fetch
+    # Metadata implies a 4x4 tile grid, while IIP contains a complete 3x2.
+    actual_width = d.download_page("A", "B", {
+        "f": "scan.tiff", "d": [{"w": 15, "h": 13}]
+    })
+    assert actual_width == 10
+    assert sorted(set(range(6)) - set(requested)) == []
+    out = tmp_path / "scan.jpg"
+    d.concatenate_page_tiles(str(out), str(tmp_path / "scan"), actual_width)
+    with Image.open(out) as image:
+        assert image.size == (10, 5)
+
+
+def test_prlib_does_not_accept_incomplete_grid_on_404(tmp_path):
+    d = downloader(tmp_path)
+    d.TILE_SIZE = 4
+    d.folder = str(tmp_path)
+
+    def fetch(folder, index, _url):
+        if index == 6:
+            return False
+        # No shorter bottom row; this cannot be proven to be complete.
+        width = 2 if index % 3 == 2 else 4
+        Image.new("RGB", (width, 4), "green").save(
+            __import__('os').path.join(folder, f"{index:05d}.jpg"), "JPEG")
+        return True
+
+    d.download_jpeg = fetch
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        d.download_page("A", "B", {"f": "scan.tiff", "d": [{"w": 15, "h": 13}]})

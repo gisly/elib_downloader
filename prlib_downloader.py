@@ -20,6 +20,17 @@ from PIL import Image, UnidentifiedImageError
 from abstract_lib_downloader import LibraryDownloader
 
 
+class MissingExpectedTile(RuntimeError):
+    """An IIP tile is 404 despite the catalogue's claimed dimensions."""
+
+    def __init__(self, index, total, filename):
+        self.index = index
+        super().__init__(
+            f"Не получен фрагмент {index + 1}/{total} "
+            f"страницы {filename} (HTTP 404)."
+        )
+
+
 class PRlibDownloader(LibraryDownloader):
     METADATA_URL = (
         "https://content.prlib.ru/metadata/public/"
@@ -176,10 +187,61 @@ class PRlibDownloader(LibraryDownloader):
                 logging.info("Загружаем страницу %s/%s (масштаб %s)", page_index, total, zoom)
                 self._current_page_index = page_index
                 self._current_page_total = total
-                self.download_page(book_name, filegroup, page)
+                actual_width = self.download_page(book_name, filegroup, page)
+                self._page_widths[basename] = actual_width or width
                 tile_folder = os.path.join(self.folder, basename)
                 self.concatenate_page_tiles(destination, tile_folder, self._page_widths[basename])
             self.report_progress(page_index, total, reused=reused)
+
+    def _cached_complete_grid(self, folder):
+        """Infer an *entire* IIP image only when both its right and bottom
+        edges are present and every tile fits a rectangular row-major grid.
+
+        This is a conservative recovery path for PRLIB metadata that describes
+        different dimensions from the image delivered by iipsrv. If the edge
+        pattern is ambiguous (e.g. dimensions divisible by 256), leave it to
+        the ordinary metadata-based path rather than produce a cropped scan.
+        """
+        try:
+            names = sorted(name for name in os.listdir(folder)
+                           if re.fullmatch(r"\d{5}\.jpg", name))
+        except FileNotFoundError:
+            return None
+        if len(names) < 4:
+            return None
+        if names != [f"{i:05d}.jpg" for i in range(len(names))]:
+            return None  # A missing/invalid tile must never be silently skipped.
+        sizes = []
+        try:
+            for name in names:
+                with Image.open(os.path.join(folder, name)) as tile:
+                    tile.verify()
+                with Image.open(os.path.join(folder, name)) as tile:
+                    sizes.append(tile.size)
+        except (OSError, ValueError, UnidentifiedImageError):
+            return None
+        size = self.TILE_SIZE
+        edges = [i for i, (w, _h) in enumerate(sizes) if 0 < w < size]
+        if not edges:
+            return None
+        columns = edges[0] + 1
+        if columns < 2 or len(sizes) % columns:
+            return None
+        rows = len(sizes) // columns
+        if rows < 2:
+            return None
+        right_width = sizes[edges[0]][0]
+        last_height = sizes[-1][1]
+        if not (0 < last_height < size):
+            return None
+        for i, (width, height) in enumerate(sizes):
+            col, row = i % columns, i // columns
+            if width != (right_width if col == columns - 1 else size):
+                return None
+            if height != (last_height if row == rows - 1 else size):
+                return None
+        return ((columns - 1) * size + right_width,
+                (rows - 1) * size + last_height)
 
     def download_page(self, book_name, book_second_name, page):
         page_name = page["f"]
@@ -188,6 +250,17 @@ class PRlibDownloader(LibraryDownloader):
         os.makedirs(folder, exist_ok=True)
         zoom, width = self._page_scale(page)
         height = page["d"][zoom].get("h")
+
+        # A previous run may already have fetched a *complete* image even if
+        # the catalogue claims a larger grid. Reuse it instead of requesting
+        # the known-nonexistent next tile again.
+        complete = self._cached_complete_grid(folder)
+        if complete is not None and (complete[0] != width or complete[1] != height):
+            logging.warning(
+                "PRLIB %s: размеры скана на сервере %sx%s отличаются от "
+                "метаданных %sx%s (масштаб %s); собираем проверенную сетку",
+                page_name, *complete, width, height, zoom)
+            return complete[0]
 
         # Most Diva metadata includes the exact dimensions for this level.
         # Avoid requesting an extra, nonexistent tile when we can derive the
@@ -211,9 +284,7 @@ class PRlibDownloader(LibraryDownloader):
                         "PRLIB не отдал ни одного фрагмента страницы "
                         f"{page_name} (HTTP 404). Возможно, сканы недоступны.")
                 if expected_tiles is not None:
-                    raise RuntimeError(
-                        f"Не получен фрагмент {tile_num + 1}/{expected_tiles} "
-                        f"страницы {page_name} (HTTP 404).")
+                    raise MissingExpectedTile(tile_num, expected_tiles, page_name)
                 return False
             return True
 
@@ -230,12 +301,59 @@ class PRlibDownloader(LibraryDownloader):
         # Only a known grid can safely be requested out of order.  When the
         # height is absent, we must stop at the first 404 as before.
         if expected_tiles is not None:
-            self.parallel(range(limit), fetch, on_done=completed)
+            try:
+                self.parallel(range(limit), fetch, on_done=completed)
+            except MissingExpectedTile as missing:
+                # Sometimes the IIP server and Diva metadata disagree on this
+                # particular scan. Only recover if the 404 is *after* a fully
+                # verified rectangular image, with explicit right/bottom edges.
+                # Finish in-flight tiles from the last row before deciding.
+                guessed_columns = None
+                for index in range(missing.index):
+                    path = os.path.join(folder, f"{index:05d}.jpg")
+                    if not self.file_ready(path):
+                        continue
+                    with Image.open(path) as tile:
+                        if 0 < tile.width < self.TILE_SIZE:
+                            guessed_columns = index + 1
+                            break
+                # The first error from parallel workers may be tile 71 or 72
+                # even when tile 70 is the *first* missing one.
+                boundary = (missing.index // guessed_columns) * guessed_columns if guessed_columns else 0
+                if boundary:
+                    for index in range(boundary):
+                        path = os.path.join(folder, f"{index:05d}.jpg")
+                        if not self.file_ready(path):
+                            fetch(index)
+                complete = self._cached_complete_grid(folder)
+                if complete is None:
+                    raise
+                actual_tiles = (math.ceil(complete[0] / self.TILE_SIZE) *
+                                math.ceil(complete[1] / self.TILE_SIZE))
+                if missing.index < actual_tiles:
+                    raise
+                if missing.index > actual_tiles:
+                    # Verify the first missing tile, not merely one of the
+                    # later 404s which happened to finish first.
+                    try:
+                        fetch(actual_tiles)
+                    except MissingExpectedTile:
+                        pass
+                    else:
+                        raise
+                logging.warning(
+                    "PRLIB %s: метаданные %sx%s обещают %s плиток, "
+                    "но сервер отдал полное изображение %sx%s (%s плиток). "
+                    "Используем реальные размеры.",
+                    page_name, width, height, expected_tiles,
+                    *complete, actual_tiles)
+                return complete[0]
         else:
             for tile_num in range(limit):
                 if not fetch(tile_num):
                     return
             raise RuntimeError(f"Слишком много фрагментов у страницы {page_name} (больше {self.MAX_TILE_NUM})")
+        return width
 
     def download_jpeg(self, output_folder_page, tile_num, tile_url):
         """404 ends a tile sequence; cached valid tiles are reused."""
